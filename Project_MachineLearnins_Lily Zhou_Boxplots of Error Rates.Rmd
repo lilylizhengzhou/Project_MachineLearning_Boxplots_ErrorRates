@@ -1,0 +1,235 @@
+---
+title: "Boxplots of 100 Training Error Rates and Test Error Rates for 6 methods"
+author: "Lily (Lizheng) Zhou"
+date: "November 16, 2019"
+output: 
+  pdf_document: 
+    number_sections: true
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction 
+In this project, I repeat the following 100 times: 
+
+  Randomly split the data in half, that is train and test. 
+
+  Fitted the models with 6 methods: 
+  
+  1. LDA
+    
+  2. QDA
+    
+  3. KNN and tune K using 10-fold CV
+    
+  4. LASSO logistic and tune lambda using 10-fold CV
+    
+  5. Ridge logistic and tune lambda using 10 fold CV
+    
+  6. Random Forest with m = sqrt(p) and 300 bootstrapped trees
+
+  Later use the models to predict the responses for the TRAIN data and TEST data, and calculate the TRAINING error rate and TEST error rate. 
+
+At last, I created side-by-side boxplots of the 100 Training Error Rates and Test Error Rates for the methods mentioned above. 
+
+Data Source: Spam Dataset <https://web.stanford.edu/~hastie/ElemStatLearn/> 
+
+# Boxplots
+Side-by-side boxplots of the 100 Training Error Rates and Test Error Rates for LDA, QDA with noise, KNN, Lasso, Ridge, Random Forest methods shown here. 
+
+```{r main, message=FALSE, warning=FALSE, echo=FALSE, results=FALSE} 
+set.seed(1)
+# load library
+library(MASS) 
+library(class) 
+library(glmnet )
+library(tree) 
+library(e1071) 
+library(randomForest)
+
+# Exploratory Data Analysis 
+spam = read.table("D:/d/Courses/STA/STA 9891/HW/HW4/spam.data.txt")
+
+# Matrix create
+train_err.matrix = matrix(0, nrow = 100, ncol = 6)
+colnames(train_err.matrix) = c("LDA","QDA","KNN","LASSO","Ridge","Random Forest")
+
+test_err.matrix = matrix(0, nrow = 100, ncol = 6)
+colnames(test_err.matrix) = c("LDA","QDA","KNN","LASSO","Ridge","Random Forest")
+
+# Standardize the data
+n = nrow(spam)
+p = ncol(spam) - 1
+spam[ ,1:p] = data.frame(scale(spam[ ,1:p]))
+
+# add noise for QDA 
+noise = matrix(rnorm(n=131100, mean=0, sd=0.01), nrow=2300, ncol=57) 
+
+# for loop 
+for (i in 1:100) {
+  # Split in half
+  train = sample(n, n/2)
+  spam.train = spam[train, ]
+  spam.test = spam[-train, ]
+  V58.train = spam[,58][train]
+  V58.test = spam[,58][-train]
+  x.train = spam.train[,-58] 
+  x.test = spam.test[,-58] 
+
+  # LDA 
+  fit.lda = lda(V58 ~ ., data = spam, subset = train)
+  # train 
+  lda.pred.train = predict(fit.lda, spam.train)
+  lda.class.train=lda.pred.train$class 
+  train_err.matrix[i,1] = mean(lda.class.train != V58.train)
+  # test
+  lda.pred.test = predict(fit.lda, spam.test)
+  lda.class.test=lda.pred.test$class 
+  test_err.matrix[i,1] = mean(lda.class.test != V58.test)
+
+  # QDA with noise 
+  spam.train.noise = data.frame(data.matrix(spam.train[,-58])+noise, 'V58'=spam.train[,58])
+  fit.qda = qda(V58 ~ ., data = spam.train.noise)
+  # train 
+  qda.pred.train = predict(fit.qda, spam.train)
+  qda.class.train=qda.pred.train$class 
+  train_err.matrix[i,2] = mean(qda.class.train != V58.train)
+  # test
+  qda.pred.test = predict(fit.qda, spam.test)
+  qda.class.test=qda.pred.test$class 
+  test_err.matrix[i,2] = mean(qda.class.test != V58.test)
+  
+  # KNN 
+  # tune K using 10-fold CV for KNN 
+  optimal_k = tune.knn(as.matrix(x.train), as.factor(V58.train), k=1:20, 
+                       tunecontrol=tune.control(sampling="cross"), cross=10)
+  best_k = optimal_k$best.parameters$k
+  # train
+  knn.pred.train = knn(x.train, x.train, V58.train, k=best_k)
+  train_err.matrix[i,3] = mean(knn.pred.train != V58.train) 
+  # test
+  knn.pred.test = knn(x.train, x.test, V58.train, k=best_k)
+  test_err.matrix[i,3] = mean(knn.pred.test != V58.test) 
+
+  # LASSO and Ridge
+  x = model.matrix(V58 ~ ., spam)[,-1]
+  y = spam$V58
+
+  # Lasso 
+  # Find the optimal lambda value via cross validation
+  cv.out.lasso = cv.glmnet(x[train,], y[train], alpha=1, family="binomial", 
+                           intercept=TRUE, standardize=FALSE, type.measure="class")
+  bestlam.lasso = cv.out.lasso$lambda.min
+  # Fit a lasso regression model
+  lasso.fit = glmnet(x[train,],y[train], alpha=1, lambda=bestlam.lasso, family="binomial",
+                     intercept=TRUE, standardize=FALSE) 
+  # Compute the train error
+  lasso.prob.train = predict(lasso.fit, s=bestlam.lasso, newx=x[train,])
+  lasso.pred.train = V58.train 
+  lasso.pred.train[lasso.prob.train>0.5] = 1
+  lasso.pred.train[lasso.prob.train<0.5] = 0 
+  train_err.matrix[i,4] = mean(y[train] != lasso.pred.train)
+  # Compute the test error
+  lasso.prob.test = predict(lasso.fit, s=bestlam.lasso, newx=x[-train,])
+  lasso.pred.test = V58.test 
+  lasso.pred.test[lasso.prob.test>0.5] = 1
+  lasso.pred.test[lasso.prob.test<0.5] = 0 
+  test_err.matrix[i,4] = mean(y[-train] != lasso.pred.test)
+
+  # Ridge 
+  # Find the optimal lambda value via cross validation
+  cv.out.ridge = cv.glmnet(x[train,], y[train], alpha=0, family="binomial", 
+                           intercept=TRUE, standardize=FALSE, type.measure="class")
+  bestlam.ridge = cv.out.ridge$lambda.min
+  # Fit a ridge regression model
+  ridge.fit = glmnet(x[train,],y[train], alpha=0, lambda=bestlam.ridge, family="binomial", 
+                     intercept=TRUE, standardize=FALSE) 
+  # Compute the train error
+  ridge.prob.train = predict(ridge.fit, s=bestlam.ridge, newx=x[train,])
+  ridge.pred.train = V58.train 
+  ridge.pred.train[ridge.prob.train>0.5] = 1
+  ridge.pred.train[ridge.prob.train<0.5] = 0 
+  train_err.matrix[i,5] = mean(y[train] != ridge.pred.train)
+  # Compute the test error
+  ridge.prob.test = predict(ridge.fit, s=bestlam.ridge, newx=x[-train,])
+  ridge.pred.test = V58.test 
+  ridge.pred.test[ridge.prob.test>0.5] = 1
+  ridge.pred.test[ridge.prob.test<0.5] = 0 
+  test_err.matrix[i,5] = mean(y[-train] != ridge.pred.test)
+  
+  # Random Forest
+  fit.rf = randomForest(V58 ~ ., data=spam, subset=train, 
+                        mtry=sqrt(p), ntree=300, importance=TRUE)
+  # train 
+  rf.prod.train = predict(fit.rf, newdata=spam.train)
+  rf.pred.train = V58.train 
+  rf.pred.train[rf.prod.train>0.5] = 1
+  rf.pred.train[rf.prod.train<0.5] = 0 
+  train_err.matrix[i,6] = mean(V58.train != rf.pred.train)
+  
+  # test
+  rf.prod.test = predict(fit.rf, newdata=spam.test)
+  rf.pred.test = V58.test 
+  rf.pred.test[rf.prod.test>0.5] = 1
+  rf.pred.test[rf.prod.test<0.5] = 0 
+  test_err.matrix[i,6] = mean(V58.test != rf.pred.test)
+}
+
+```
+
+```{r boxplot, message=FALSE, warning=FALSE, echo=FALSE, results=FALSE, fig.height=12, fig.width=10} 
+
+train_err.matrix
+test_err.matrix
+
+# boxplots
+par(mfrow=c(2,1))
+boxplot(train_err.matrix, main = "100 TRAINING ERROR RATES")
+boxplot(test_err.matrix, main = "100 TEST ERROR RATES")
+```
+
+# Conclusion 
+Within one method, we see that a model's training error rate is lower than test error rate, test error rate is true error rate, while the training error rate is often overly optimistic. 
+
+From the Boxplots, we see that **Random Forest seems works best** for this dataset, test error rate and training error rate are all very low. While **QDA perform worst**, actually this is already adding noise to QDA, the error rate is still highest. Other methods perform between QDA and Random Forest. 
+
+**Lasso and ridge** are similar methods, while Lasso perform better in this dataset. **LDA** and **KNN** perform ok. Also since I used Train data and `tune.knn()` function to choose optimal k, k value finally use are different (most k are from 1-10), so the variance of training error rate of KNN is larger than others. 
+
+# Appendix 
+## Matrix of Training Error Rates and Test Error Rates 
+**Training Error Rate Matrix**:
+
+```{r Training Error Rate Matrix, echo=FALSE}
+# Training Error Rate Matrix
+train_err.matrix
+```
+
+**Test Error Rate Matrix**: 
+
+```{r Test Error Rate Matrix, echo=FALSE}
+# Test Error Rate Matrix
+test_err.matrix
+```
+
+**Matrix Summary**: 
+
+Training Error Rate Matrix Summary: 
+```{r Training Error Rate Matrix Summary, echo=FALSE}
+# Training Error Rate Matrix Summary
+summary(train_err.matrix)
+```
+
+Test Error Rate Matrix Summary: 
+```{r Test Error Rate Matrix Summary, echo=FALSE}
+# Test Error Rate Matrix Summary
+summary(test_err.matrix)
+```
+
+## R Code
+
+```{r ref.label=knitr::all_labels(), echo = TRUE, eval = FALSE}
+```
